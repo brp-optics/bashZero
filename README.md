@@ -1,11 +1,11 @@
 # bashZero
-Track progress toward inboxZero-style goals from the command line. Currently supports number of folders in a file.
+Track progress toward inboxZero-style goals from the command line. Currently supports number of files in a local folder.
 
-100% hand-coded with love.
+AGPLv3-licensed; 100% hand-coded; only external dependency is matplotlib
 
-AGPLv3-licensed
+requires python > 3.4
 
-usage: 
+Current usage: 
 
 ```bash
 python3 bashZero
