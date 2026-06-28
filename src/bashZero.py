@@ -1,6 +1,10 @@
 #!/bin/env python3
 
 """
+    BashZero v0.2.0:
+         - Add bash command as default new target.
+         - Half-ass argparse for input. Otherwise I can't remember what the inputs are.
+
     BashZero v0.1.0:
          - Lots of bugfixes.
          - Default command-line folder target addition.
@@ -29,6 +33,8 @@ import matplotlib.pyplot as plt
 plt.rcParams["font.family"] = "Noto Sans CJK KR"
 plt.rcParams["axes.unicode_minus"] = False
 import sys
+import argparse
+
 
 # Simple dict of directories for now
 # Dict(Name => Type, Path, (Valuehist))
@@ -37,6 +43,8 @@ import sys
 #  targets = {}
 #  targets["home"] = {"type": "folder_size", "function": "linear", "goal": 8, "starttime": , "dailyrate": -1, "path":"/home/user/", "valuehist": [("2026-06-22T05:59:49.286862+09:00", 8)], "goalhist": [(2026-06-22T05:59:49.28682+09:00", 8)]}
 
+#  Example second generation target: Just run bash for everything. CMD must return a numerical string that can be converted to float().
+#  targets["home"] = {"type": "bash_command", "function": "linear", "goal": 8, "starttime": , "dailyrate": -1, "cmd":"ls /home/user/ | wc -l", "valuehist": [("2026-06-22T05:59:49.286862+09:00", 8)], "goalhist": [(2026-06-22T05:59:49.28682+09:00", 8)]}
 
 # Use local time for goal calculations and graphs
 config = {}
@@ -57,6 +65,16 @@ def folder_size(p: Path) -> int:
     """ Counts hidden files and folders, but not . and .."""
     return sum(1 for _ in p.iterdir())
 
+def bash_command(c: str) -> float:
+    """ Assuming a bash command returns a single number on a single line, get the result of the command."""
+    result = subprocess.run(c, shell=True, capture_output=True, text=True)
+    print(result.stdout)
+    try:
+        return float(str(result.stdout).strip())
+    except:
+        print("Warning: unable to get a float out of command. Edit in config later and rerun.")
+        return 0
+
 def get_value(t: Key) -> int:
     """
         Get current value for target, for all types of targets.
@@ -68,6 +86,8 @@ def get_value(t: Key) -> int:
     match typ:
         case "folder_size":
             return folder_size(Path(targets[t]["path"]))
+        case "bash_command":
+            return bash_command(targets[t]["cmd"])
     
 def save_value(t: Key, i: int, valuetype="valuehist"):
     """
@@ -252,31 +272,46 @@ def safe_firstgoal(first_value, rate, goal, starttime, gf):
     else:
         raise ValueError
     
-def add_target(key: Key, typ: str, fn: str, goal: float, starttime: str, rate: float, pth: Path, startval: float):
+def add_target(key: Key, typ: str, fn: str, goal: float, starttime: str, rate: float, pth_or_cmd: str, startval: float):
     if startval == None and typ == "folder_size":
-        startval = folder_size(pth)
-    
+        startval = folder_size(Path(pth_or_cmd))
+    if startval == None and typ == "bash_command":
+        startval = bash_command(pth_or_cmd)
+        
     if fn == "linear" or fn == "exponential":
         firstgoaltime, firstgoalval = safe_firstgoal(startval, rate, goal, starttime.isoformat(), fn)
     else:
         raise ValueError
 
-    
-    targets[key] = {
-        "type": typ,
-        "function": fn,
-        "goal": goal,
-        "starttime": starttime.isoformat(),
-        "dailyrate": rate,
-        "path": str(pth),
-        "valuehist": [(starttime.isoformat(), startval)],
-        "goalhist": [(firstgoaltime, firstgoalval)]
-    }
+    if typ == "folder_size":
+        targets[key] = {
+            "type": typ,
+            "function": fn,
+            "goal": goal,
+            "starttime": starttime.isoformat(),
+            "dailyrate": rate,
+            "path": str(Path(pth_or_cmd)),
+            "valuehist": [(starttime.isoformat(), startval)],
+            "goalhist": [(firstgoaltime, firstgoalval)]
+        }
+    elif typ == "bash_command":
+        targets[key] = {
+            "type": typ,
+            "function": fn,
+            "goal": goal,
+            "starttime": starttime.isoformat(),
+            "dailyrate": rate,
+            "cmd": pth_or_cmd,
+            "valuehist": [(starttime.isoformat(), startval)],
+            "goalhist": [(firstgoaltime, firstgoalval)]
+        }
 
 def add_target_interactive():
    """ Quick hack to allow me to add a folder without parsing command line arguments."""
    pass
-   
+
+def add_target_command(name, cmd, fn, rate, goal):
+    add_target(name, "bash_command", fn, float(goal), dt.now(pytz.timezone("UTC")), float(rate), cmd, bash_command(cmd))
 
 def add_target_folder(name, pth, fn, rate, goal):
     add_target(name, "folder_size", fn, float(goal), dt.now(pytz.timezone("UTC")), float(rate), pth, folder_size(Path(pth)))
@@ -305,9 +340,27 @@ def manual_update(t: Key):
 def main():
     load_targets()
 
-    ARGV = sys.argv
-    if len(ARGV) > 1:
-        add_target_folder(ARGV[1], ARGV[2], ARGV[3], ARGV[4], ARGV[5])
+    parser = argparse.ArgumentParser(description = "Track progress towards goals in bash.")
+    parser.add_argument("--add", dest="target_name", help="shortcut name (lookup key) for the new target")
+    parser.add_argument("--path", dest="pth", help="folder path for folder_size goals")
+    parser.add_argument("--cmd", dest="cmd", help="bash command for bash_command goals")
+    parser.add_argument("--fn", "--function", dest="fn", default="linear", choices=["linear", "exponential"])
+    parser.add_argument("--rate", "-r", type=float, default=0, dest="rate", help="growth rate. rate < 0 for decreasing linear, rate < 1 for decreasing exponential")
+    parser.add_argument("--goal", "-g", type=float, default=0, dest="goal", help="final goal")
+
+    args = parser.parse_args()
+
+    if args.target_name:
+        if args.pth and args.cmd:
+            raise ValueError(f"You may only specify one of pth and cmd. Received pth={args.pth} and cmd={args.cmd}.")
+        elif args.pth:
+            add_target_folder(args.target_name, args.pth, args.fn, args.rate, args.goal)
+        elif args.cmd:
+            print(f"Adding command {args.cmd}. I hope that escapes properly. Test value: {bash_command(args.cmd)}")
+            add_target_command(args.target_name, args.cmd, args.fn, args.rate, args.goal)
+        else:
+            raise ValueError(f"You must specify one of pth and cmd. Received pth={args.pth} and cmd={args.cmd}.")
+
     update_values()
     update_goalhists()
     save_targets()
